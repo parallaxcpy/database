@@ -212,6 +212,18 @@
   .store-note.warn{color:var(--st-testando)}
   .store-note.sb{color:var(--green)}
 
+
+
+  /* ACTIVITY FEED */
+  .feed{display:flex;flex-direction:column;gap:8px}
+  .feed-empty{text-align:center;padding:48px 20px;color:var(--text-faint);font-size:13.5px}
+  .feed-item{background:var(--surface);border:1px solid var(--border-soft);border-radius:10px;padding:13px 16px;display:grid;grid-template-columns:36px 1fr auto;gap:12px;align-items:start}
+  .feed-avatar{width:36px;height:36px;border-radius:50%;background:var(--surface-3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;color:var(--green);flex:none}
+  .feed-body .feed-action{font-size:13px;font-weight:500}
+  .feed-body .feed-detail{font-size:12px;color:var(--text-dim);margin-top:3px}
+  .feed-body .feed-entity{color:var(--green)}
+  .feed-time{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-faint);white-space:nowrap}
+
   @media(max-width:880px){
     .offer-head{grid-template-columns:1fr;gap:12px}
     .offer-sum{justify-content:flex-start}.summ{text-align:left}
@@ -246,6 +258,7 @@
     <div class="seg">
       <button id="segOfertas" class="on" onclick="setView('ofertas')">Ofertas</button>
       <button id="segRanking" onclick="setView('ranking')">Ranking</button>
+      <button id="segAtividades" onclick="setView('atividades')">Atividades</button>
     </div>
     <div class="search">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b94a3" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
@@ -301,6 +314,8 @@
         <div class="field"><label>Página de venda</label><input id="o_lk_pagina" placeholder="https://…"></div>
         <div class="field"><label>Checkout</label><input id="o_lk_checkout" placeholder="https://…"></div>
       </div>
+      <div class="sec-label">Integração Hotmart</div>
+      <div class="field"><label>Hotmart Product ID</label><input id="o_hotmart_id" placeholder="ex: 7921593" type="text"><div style="font-size:11px;color:var(--text-faint);margin-top:5px">Encontre na URL do produto na Hotmart. O n8n vai puxar as vendas diárias automaticamente.</div></div>
     </div>
     <div class="modal-foot"><button class="btn ghost" data-close="ovOffer">Cancelar</button><button class="btn primary" id="saveOffer">Salvar oferta</button></div>
   </div>
@@ -401,7 +416,7 @@ function normalize(arr){
   return (arr||[]).map(o=>({
     id:o.id||uid(),nome:o.nome||'',nicho:o.nicho||'',status:o.status||'Em teste',
     data:o.data||today(),ticket:o.ticket??null,promessa:o.promessa||'',
-    cur:o.cur||'BRL',countries:o.countries||'',
+    cur:o.cur||'BRL',countries:o.countries||'',hotmartProductId:o.hotmartProductId||'',
     links:Object.assign({criativo:'',funil:'',pagina:'',checkout:''},o.links||{}),
     daily:(o.daily||[]).map(d=>({id:d.id||uid(),data:d.data||today(),vendas:d.vendas??null,invest:d.invest??null,cpa:d.cpa??null,ic:d.ic??null})),
     tests:(o.tests||[]).map(t=>({
@@ -567,7 +582,7 @@ function offerHTML(o,vis){
     <div class="offer-head" onclick="toggleOffer('${o.id}')">
       <div>${pill(o.status)}</div>
       <div class="offer-lead">
-        <div class="eyebrow">Oferta · ${symOf(o.cur)}${o.ticket!=null?' · '+money(o.ticket,o.cur):''}</div>
+        <div class="eyebrow">Oferta · ${symOf(o.cur)}${o.ticket!=null?' · '+money(o.ticket,o.cur):''}${o.hotmartProductId?' · HM #'+esc(o.hotmartProductId):''}</div>
         <div class="nome">${esc(o.nome)||'Sem nome'}</div>
         <div class="nicho">${esc(o.nicho)||'sem nicho'}</div>
         ${o.countries?`<div class="paises">Rodando em: ${esc(o.countries)}</div>`:''}
@@ -608,25 +623,54 @@ function linksRow(o){
 }
 
 function dailyPanel(o){
-  const d=[...(o.daily||[])].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
+  // Manual entries
+  const manual=[...(o.daily||[])].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
+  // Hotmart entries from cache
+  const hm=(hotmartCache[o.id]||[]);
+
+  // Merge: hotmart is source of truth for vendas when available, manual fills invest/cpa
+  const byDate={};
+  manual.forEach(x=>{byDate[x.data]=byDate[x.data]||{data:x.data,vendas:null,receita:null,invest:null,cpa:null,ic:null,id:x.id,src:'manual'};
+    Object.assign(byDate[x.data],{vendas:x.vendas,invest:x.invest,cpa:x.cpa,ic:x.ic,id:x.id,src:'manual'});});
+  hm.forEach(x=>{byDate[x.data]=byDate[x.data]||{data:x.data,vendas:null,receita:null,invest:null,cpa:null,ic:null,src:'hotmart'};
+    Object.assign(byDate[x.data],{vendas:x.vendas,receita:x.receita,cpa:x.cpa,src:'hotmart'});});
+
+  const d=Object.values(byDate).sort((a,b)=>a.data.localeCompare(b.data));
   const tot=d.reduce((s,x)=>s+(x.vendas||0),0);
   const inv=d.reduce((s,x)=>s+(x.invest||0),0);
-  const cpaMed=tot?inv/tot:null;
+  const totReceita=d.reduce((s,x)=>s+(x.receita||0),0);
+  const cpaMed=tot?(inv||totReceita)/tot:null;
   const max=Math.max(...d.map(x=>x.vendas||0),1);
-  const bars=d.length?d.slice(-24).map(x=>`<div class="bar" title="${x.data}: ${x.vendas||0} vendas"><i style="height:${(x.vendas||0)/max*100}%"></i><span>${shortDate(x.data)}</span></div>`).join(''):'';
-  const rows=d.length?[...d].reverse().slice(0,12).map(x=>`<div class="drow"><div class="dd">${x.data}</div><div>${fmt(x.vendas)}</div><div class="d4">${money(x.invest,o.cur)}</div><div>${money(x.cpa,o.cur)}</div><div class="dx" onclick="delDay('${o.id}','${x.id}')">×</div></div>`).join(''):'';
+
+  const srcBadge=src=>src==='hotmart'?'<span style="font-size:8px;background:color-mix(in srgb,var(--green) 15%,transparent);color:var(--green);padding:2px 5px;border-radius:4px;font-family:JetBrains Mono,monospace">HM</span>':'';
+  const bars=d.length?d.slice(-30).map(x=>`<div class="bar" title="${x.data}: ${x.vendas||0} vendas${x.src==='hotmart'?' (Hotmart)':' (manual)'}"><i style="height:${(x.vendas||0)/max*100}%;${x.src==='hotmart'?'':'opacity:.7'}"></i><span>${shortDate(x.data)}</span></div>`).join(''):'';
+  const rows=d.length?[...d].reverse().slice(0,20).map(x=>`<div class="drow">
+    <div class="dd">${x.data} ${srcBadge(x.src)}</div>
+    <div style="color:var(--green);font-weight:600">${fmt(x.vendas)}</div>
+    <div class="d4">${x.receita!=null?money(x.receita,o.cur):money(x.invest,o.cur)}</div>
+    <div>${money(x.cpa,o.cur)}</div>
+    <div class="dx" onclick="delDay('${o.id}','${x.id||''}')" title="Remover registro manual">×</div>
+  </div>`).join(''):'';
+
+  const hmStatus=o.hotmartProductId
+    ?`<span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--green)">● Hotmart #${esc(o.hotmartProductId)} conectado · sync diário via n8n</span>`
+    :`<span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text-faint)">◌ sem Hotmart ID · adicione na oferta pra sync automático</span>`;
+
   return `<div class="panel">
     <div class="panel-head">
-      <span class="blk-title" style="margin:0">Vendas por período</span>
+      <div>
+        <span class="blk-title" style="margin:0;display:block;margin-bottom:6px">Vendas por período</span>
+        ${hmStatus}
+      </div>
       <div class="daily-totals">
         <div class="dt"><div class="n" style="color:var(--green)">${tot}</div><div class="k">Vendas acum.</div></div>
-        <div class="dt"><div class="n">${money(inv,o.cur)}</div><div class="k">Investido</div></div>
+        <div class="dt"><div class="n">${money(inv||totReceita||null,o.cur)}</div><div class="k">Receita</div></div>
         <div class="dt"><div class="n">${money(cpaMed,o.cur)}</div><div class="k">CPA médio</div></div>
       </div>
     </div>
     ${d.length?`<div class="bars">${bars}</div>
-      <div class="drows"><div class="drow drow-h"><div>Data</div><div>Vendas</div><div class="d4">Invest.</div><div>CPA</div><div></div></div>${rows}</div>`
-      :'<div class="tests-empty">Nenhum registro diário ainda. Clique em "Registrar dia" pra começar o rastreio.</div>'}
+      <div class="drows"><div class="drow drow-h"><div>Data</div><div>Vendas</div><div class="d4">Receita</div><div>CPA</div><div></div></div>${rows}</div>`
+      :'<div class="tests-empty">Nenhum dado ainda. Adicione o Hotmart Product ID na oferta pra sync automático, ou clique em "Registrar dia" pra entrada manual.</div>'}
   </div>`;
 }
 
@@ -713,10 +757,20 @@ const findTest=(oid,tid)=>findOffer(oid).tests.find(x=>x.id===tid);
 function setView(v){viewMode=v;
   document.getElementById('segOfertas').classList.toggle('on',v==='ofertas');
   document.getElementById('segRanking').classList.toggle('on',v==='ranking');
+  document.getElementById('segAtividades').classList.toggle('on',v==='atividades');
   document.getElementById('rankMetric').style.display=v==='ranking'?'':'none';
+  if(v==='atividades'){loadActivity().then(renderFeed);return;}
   render();}
 function jumpTo(oid,tid){viewMode='ofertas';setView('ofertas');openOffer=oid;openTest=tid;render();}
-function toggleOffer(id){openOffer=openOffer===id?null:id;openTest=null;render();}
+function toggleOffer(id){
+  const opening = openOffer !== id;
+  openOffer = opening ? id : null;
+  openTest = null;
+  if(opening && useSB()) {
+    loadHotmartDaily(id).then(render);
+  }
+  render();
+}
 function toggleTest(id){openTest=openTest===id?null:id;render();}
 async function toggleCheck(oid,tid,i){const t=findTest(oid,tid);t.checklist[i].done=!t.checklist[i].done;await save();render();}
 async function editCheck(oid,tid,i,v){const t=findTest(oid,tid);if(t.checklist[i].label!==v){t.checklist[i].label=v;await save();}}
@@ -735,13 +789,16 @@ function openOfferModal(id){
   g('o_cur').value=o?o.cur:'BRL';g('o_countries').value=o?o.countries:'';
   g('o_data').value=o?o.data:today();g('o_ticket').value=o&&o.ticket!=null?o.ticket:'';g('o_promessa').value=o?o.promessa:'';
   const L=o?o.links:{};g('o_lk_criativo').value=L.criativo||'';g('o_lk_funil').value=L.funil||'';g('o_lk_pagina').value=L.pagina||'';g('o_lk_checkout').value=L.checkout||'';
+  g('o_hotmart_id').value=o?o.hotmartProductId||'':
+    '';
   show('ovOffer');
 }
 async function saveOffer(){
   const g=v=>document.getElementById(v).value;
   const links={criativo:g('o_lk_criativo'),funil:g('o_lk_funil'),pagina:g('o_lk_pagina'),checkout:g('o_lk_checkout')};
-  if(editOfferId){Object.assign(findOffer(editOfferId),{nome:g('o_nome'),nicho:g('o_nicho'),status:g('o_status'),cur:g('o_cur'),countries:g('o_countries'),data:g('o_data'),ticket:num(g('o_ticket')),promessa:g('o_promessa'),links});}
-  else{const id=uid();offers.push({id,nome:g('o_nome'),nicho:g('o_nicho'),status:g('o_status'),cur:g('o_cur'),countries:g('o_countries'),data:g('o_data'),ticket:num(g('o_ticket')),promessa:g('o_promessa'),links,daily:[],tests:[]});openOffer=id;}
+  const hotmartProductId=g('o_hotmart_id').trim();
+  if(editOfferId){const o2=findOffer(editOfferId);Object.assign(o2,{nome:g('o_nome'),nicho:g('o_nicho'),status:g('o_status'),cur:g('o_cur'),countries:g('o_countries'),data:g('o_data'),ticket:num(g('o_ticket')),promessa:g('o_promessa'),links,hotmartProductId});logActivity('editou oferta',o2.nome,'');}
+  else{const id=uid();const nome=g('o_nome');offers.push({id,nome,nicho:g('o_nicho'),status:g('o_status'),cur:g('o_cur'),countries:g('o_countries'),data:g('o_data'),ticket:num(g('o_ticket')),promessa:g('o_promessa'),links,hotmartProductId,daily:[],tests:[]});openOffer=id;logActivity('criou oferta',nome,'');}
   await save();hide('ovOffer');render();
 }
 
@@ -763,9 +820,8 @@ async function saveTest(){
   const g=v=>document.getElementById(v).value;const o=findOffer(testCtx.offerId);
   const m={vendas:num(g('m_vendas')),cpa:num(g('m_cpa')),ic:num(g('m_ic')),ctr:num(g('m_ctr')),play:num(g('m_play')),hook:num(g('m_hook')),body:num(g('m_body')),convbody:num(g('m_convbody')),pass:num(g('m_pass'))};
   const base={areas:[...areaSel],status:g('m_status'),data:g('m_data'),hyp:g('m_hyp'),estrutura:g('m_estrutura'),orcamento:num(g('m_orcamento')),m};
-  if(testCtx.testId){Object.assign(findTest(testCtx.offerId,testCtx.testId),base);}
-  else{o.tests.push({id:uid(),...base,aprendizado:'',checklist:DEFAULT_CHECK.map(l=>({label:l,done:false}))});}
-  /* item 4: fica minimizado depois de registrado */
+  if(testCtx.testId){Object.assign(findTest(testCtx.offerId,testCtx.testId),base);logActivity('editou teste',o.nome,base.areas.join(', '));}
+  else{o.tests.push({id:uid(),...base,aprendizado:'',checklist:DEFAULT_CHECK.map(l=>({label:l,done:false}))});logActivity('adicionou teste',o.nome,base.areas.join(', ')||'sem área');}
   openTest=null;
   await save();hide('ovTest');render();
 }
@@ -779,7 +835,9 @@ function openDayModal(offerId){
 }
 async function saveDay(){
   const g=v=>document.getElementById(v).value;const o=findOffer(dayOfferId);
-  o.daily.push({id:uid(),data:g('d_data')||today(),vendas:num(g('d_vendas')),invest:num(g('d_invest')),cpa:num(g('d_cpa')),ic:num(g('d_ic'))});
+  const dayData={id:uid(),data:g('d_data')||today(),vendas:num(g('d_vendas')),invest:num(g('d_invest')),cpa:num(g('d_cpa')),ic:num(g('d_ic'))};
+  o.daily.push(dayData);
+  logActivity('registrou dia',o.nome,dayData.data+' · '+dayData.vendas+' vendas');
   await save();hide('ovDay');render();
 }
 
@@ -794,6 +852,61 @@ function exportCSV(){
   });
   const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='parallax-co-lab.csv';a.click();
+}
+
+let currentUser = {email:'parallax@parallaxco.com', user_metadata:{full_name:'Parallax Co'}};
+
+/* ---------- HOTMART DAILY ---------- */
+const hotmartCache = {};
+
+async function loadHotmartDaily(offerId) {
+  try {
+    const r = await sbFetch('/rest/v1/hotmart_daily?offer_id=eq.' + offerId + '&order=data.desc&limit=60');
+    const rows = await r.json();
+    hotmartCache[offerId] = rows || [];
+  } catch(e) { hotmartCache[offerId] = []; }
+}
+
+/* ---------- ACTIVITY LOG ---------- */
+let activityLog = [];
+
+async function loadActivity() {
+  try {
+    const r = await sbFetch('/rest/v1/activity_log?order=created_at.desc&limit=50');
+    activityLog = await r.json();
+  } catch(e) { activityLog = []; }
+}
+
+let _actorName = localStorage.getItem('parallax_actor') || '';
+async function logActivity(action, entity, detail) {
+  if (!_actorName) {
+    _actorName = prompt('Seu nome (aparece no log de atividades):') || 'Anônimo';
+    localStorage.setItem('parallax_actor', _actorName);
+  }
+  try {
+    await sbFetch('/rest/v1/activity_log', {method:'POST', body: JSON.stringify({user_email: _actorName, user_name: _actorName, action, entity, detail})});
+  } catch(e) {}
+}
+
+function renderFeed() {
+  const list = document.getElementById('list');
+  if (!activityLog.length) {
+    list.innerHTML = '<div class="feed-empty">Nenhuma atividade registrada ainda. As ações de você e do seu sócio vão aparecer aqui.</div>';
+    return;
+  }
+  list.innerHTML = '<div class="feed">' + activityLog.map(a => {
+    const initial = (a.user_name||a.user_email||'?')[0].toUpperCase();
+    const dt = new Date(a.created_at);
+    const timeStr = dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    return `<div class="feed-item">
+      <div class="feed-avatar">${initial}</div>
+      <div class="feed-body">
+        <div class="feed-action"><strong>${esc(a.user_name||a.user_email)}</strong> ${esc(a.action)} <span class="feed-entity">${esc(a.entity)}</span></div>
+        ${a.detail ? '<div class="feed-detail">' + esc(a.detail) + '</div>' : ''}
+      </div>
+      <div class="feed-time">${timeStr}</div>
+    </div>`;
+  }).join('') + '</div>';
 }
 
 /* ---------- plumbing ---------- */
